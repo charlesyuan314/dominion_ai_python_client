@@ -3,40 +3,56 @@ import json
 from websocket import create_connection
 
 
-def action_phase(state):
-    playable = [card for card in state.hand if card in ["Market", "Village"]]
-    for card in playable:
-        play_card(card, state)
+ACTIONS = {'Cellar', 'Market', 'Merchant', 'Militia', 'Mine',
+           'Moat', 'Remodel', 'Smithy', 'Village', 'Workshop'}
+
+CARDS = ["Market", "Village", "Merchant", "Smithy", "Moat"]
 
 
-def buy_phase(state):
-    playable = [card for card in state.hand if card in [
-        "Copper", "Silver", "Gold"]]
-    for card in playable:
+def action_phase(strategy, state):
+    while ACTIONS.intersection(state.hand) != set() and state.actions > 0:
+        for card in CARDS:
+            if card in state.hand:
+                play_card(card, state)
+                break
+
+
+def buy_phase(strategy, state):
+    for card in [card for card in state.hand if card in {"Copper", "Silver", "Gold"}]:
         play_card(card, state)
-    for card in find_cards_to_buy(state):
+    for card in find_cards_to_buy(strategy, state):
         if state.supply[card] > 0:
             buy_card(card, state)
 
 
-def find_cards_to_buy(state):
-    card_to_buy = "Province"
-    if state.treasure < 8:
-        card_to_buy = "Gold"
-    if state.treasure < 6:
-        card_to_buy = "Market"
-    if state.treasure < 5:
-        card_to_buy = "Silver"
-    if state.treasure < 3:
-        card_to_buy = "Copper"
-    return [card_to_buy]
+def find_cards_to_buy(strategy, state):
+    if strategy == "curses":
+        return ["Curse"]
+    if state.treasure >= 8:
+        return ["Province"]
+    elif state.treasure >= 6:
+        return ["Gold"]
+    elif strategy == "fancy" and state.treasure >= 5 and "Market" in state.supply and state.deck_cards.count("Market") <= 2:
+        return ["Market"]
+    elif strategy in ("fancy", "smithy") and state.treasure >= 4 and "Smithy" in state.supply and state.deck_cards.count("Smithy") == 0:
+        return ["Smithy"]
+    elif strategy == "fancy" and state.treasure >= 3 and "Workshop" in state.supply and state.deck_cards.count("Merchant") == 0:
+        return ["Merchant"]
+    elif strategy == "fancy" and state.treasure >= 3 and "Workshop" in state.supply and state.deck_cards.count("Village") == 0:
+        return ["Village"]
+    elif state.treasure >= 3:
+        return ["Silver"]
+    elif strategy == "fancy" and state.treasure >= 2 and "Moat" in state.supply and state.deck_cards.count("Moat") == 0:
+        return ["Moat"]
+    return []
 
 
 class State(object):
     def __init__(self) -> None:
         self.hand = []
         self.discard = 0
-        self.deck = []
+        self.deck = 0
+        self.deck_cards = []
         self.supply = {}
         self.buys = 1
         self.actions = 1
@@ -63,6 +79,7 @@ def buy_card(card, state):
     print("Buying", card)
     state.conn.send(json.dumps(state.payload))
     action_response(state)
+    state.deck_cards.append(card)
 
 
 def action_response(state):
@@ -95,7 +112,7 @@ def end_turn(state):
     state.conn.send(json.dumps(state.payload))
 
 
-def run_server(conn):
+def run_server(conn, strategy):
     state = State()
     while True:
         payload = {
@@ -111,6 +128,7 @@ def run_server(conn):
             payload["id"] = payload_id
             payload["result"] = {}
             conn.send(json.dumps(payload))
+            print("Kingdom:", response["params"]["kingdom"])
         elif method == "FatalError":
             print("Fatal error:", response["message"])
             exit(1)
@@ -119,8 +137,8 @@ def run_server(conn):
             print(state)
             state.payload = payload
             state.conn = conn
-            action_phase(state)
-            buy_phase(state)
+            action_phase(strategy, state)
+            buy_phase(strategy, state)
             end_turn(state)
         elif method == "GameOver":
             print(response["params"])
@@ -134,6 +152,8 @@ def main(args):
                         help="Dominai Endpoint with or without default name.", type=str)
     parser.add_argument("--player", action="store",
                         help="Dominai player number", type=str)
+    parser.add_argument("--strategy", action="store",
+                        help="Strategy name", type=str)
     args = parser.parse_args(args)
     args_dict = vars(args)
 
@@ -146,7 +166,7 @@ def main(args):
 
     endpoint = parse_http_endpoint(args_dict["http_endpoint"])
     connection = make_connection(endpoint, args_dict["player"])
-    run_server(connection)
+    run_server(connection, args_dict["strategy"])
 
 
 if __name__ == '__main__':
